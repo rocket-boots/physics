@@ -279,6 +279,9 @@ class Coords {
 	getMultiply(m) {
 		return new Coords(this.x * m, this.y * m);
 	}
+	getDot({x, y}){
+		return ((this.x * x) + (this.y * y));
+	}
 	getUnitVector(coords = {}) {
 		const d = this.getAbsoluteDistance(coords);
 		if (d === 0) { return new Coords(0, 0); }
@@ -393,13 +396,10 @@ var rocket_boots_coords = __webpack_require__(0);
 // CONCATENATED MODULE: ./src/physics.js
 
 
-const BIG_G_DEFAULT = 5.;
-const MIN_GRAVITY_RADIUS = 1;
-
 function physics(objects, t) {
 	// Loop through objects, apply gravity
 	objects.forEach((obj) => {
-		if (!(obj.pos instanceof XY)) { return; }
+		if (!physics.isPhysical(obj)) { return; }
 		if (obj.collide) {
 			obj.collide(objects);
 		}
@@ -413,84 +413,171 @@ function physics(objects, t) {
 	});
 }
 
-physics.getOrbitalVelocity = function (smallObject, bigObject, left = false, bigG = BIG_G_DEFAULT) {
+physics.Coords = rocket_boots_coords["Coords"];
+physics.bigG = 5.;
+physics.collidingVelocityMultiplier = 0.95;
+physics.collidePushbackMultipler = 0.2;
+physics.elasticity = 0.98;
+physics.MIN_GRAVITY_RADIUS = 1.;
+
+function newXy () {
+	return new physics.Coords();
+}
+
+// Thanks to https://www.toptal.com/game/video-game-physics-part-ii-collision-detection-for-solid-objects
+/**
+ * Checks for a collision/overlap between two objects based on an AABB calculation using only their
+ * outer radius (with inner radius as a backup), thus only considers a square for bounding box
+ * @param {Object} a 
+ * @param {Object} b 
+ */
+physics.checkAabbCollision = (a, b) => {
+	const aR = a.outerRadius || a.innerRadius;
+	const bR = b.outerRadius || b.innerRadius;
+
+	const aMax = {
+		x: a.pos.x + aR,
+		y: a.pos.y + aR,
+	};
+	const bMin = {
+		x: b.pos.x - bR,
+		y: b.pos.y - bR,
+	};
+	if (bMin.x > aMax.x || bMin.y > aMax.y) { return false; }
+
+	const aMin = {
+		x: a.pos.x - aR,
+		y: a.pos.y - aR,
+	};
+	const bMax = {
+		x: b.pos.x + bR,
+		y: b.pos.y + bR,
+	};
+	if (aMin.x > bMax.x || aMin.y > bMax.y) { return false; }
+
+	return true;
+};
+
+physics.checkRadiusCollision = (a, b) => {
+	const innerRadius = (typeof a.innerRadius === 'number') ? a.innerRadius : 0;
+	const innerRadiusB = (typeof b.innerRadius === 'number') ? b.innerRadius : 0;
+	const r = a.pos.getDistance(b.pos);
+	const edgeToEdgeDistance = r - innerRadius - innerRadiusB;
+	const isColliding = (edgeToEdgeDistance > 0) ? false : true;
+	return { isColliding, edgeToEdgeDistance };
+};
+
+/**
+ * Determine if the object is physical
+ * @param {Object} o - object
+ */
+physics.isPhysical = (o) => {
+	return o.pos instanceof physics.Coords && o.vel instanceof physics.Coords;
+}
+
+physics.getOrbitalVelocity = function (smallObject, bigObject, left = false, bigG = physics.bigG) {
 	// const m = smallObject.mass;
 	const M = bigObject.mass;
 	const r = smallObject.pos.getDistance(bigObject.pos);
 	const speed = Math.sqrt( bigG * M / r );
 	const unit = smallObject.pos.getUnitVector(bigObject.pos);
 	const v = unit.getPerpendicularVector(left).multiply(speed);
-	console.log(arguments, M, r, speed, unit, v);
+	// console.log(arguments, M, r, speed, unit, v);
 	return v;
 };
 
 physics.canCollide = (o) => ({
 	colliding: [],
+	collideDetect(b) {
+		if (!physics.checkAabbCollision(this, b)) { return false; }
+		return physics.checkRadiusCollision(this, b); 
+	},
+	collidePushback(b, edgeToEdgeDistance, pushMultiplier = physics.collidePushbackMultipler) {
+		const pusher = (o.mass > b.mass) ? o : b;
+		const pushee = (pusher === o) ? b : o;
+		const push = pushee.pos.getUnitVector(pusher.pos) // push direction
+			.multiply(edgeToEdgeDistance * pushMultiplier); // push amount
+		pushee.pos.add(push);
+		return { pusher, pushee, push };
+	},
+	collideBounce(o2, elasticity = physics.elasticity) {
+		// Thanks to http://www.gamasutra.com/view/feature/131424/pool_hall_lessons_fast_accurate_.php?page=3
+		var o1 = this;
+		if (o1.mass <= 0 || o2.mass <= 0) {
+			return false;
+		}
+		//console.log(o1.name, o2.name);
+		//console.log("original", o1.vel.x, o1.vel.y, o2.vel.x, o2.vel.y);
+		//console.log("momentum before", (o1.mass * o1.vel.getMagnitude()) + (o2.mass * o2.vel.getMagnitude()));
+		var p = (o1.mass * o1.vel.getMagnitude()) + (o2.mass * o2.vel.getMagnitude());
+		var n = o1.pos.getUnitVector(o2.pos);
+		//console.log("n = ", n);
+		var a1 = o1.vel.getDot(n);
+		var a2 = o2.vel.getDot(n);
+		var optimizedP = (2 * (a1 - a2)) / (o1.mass + o2.mass);
+		o1.vel.add( n.getMultiply(-1 * optimizedP * o2.mass) );
+		o1.vel.multiply(elasticity);
+		o2.vel.add( n.getMultiply(optimizedP * o1.mass) );
+		o1.vel.multiply(elasticity);
+		//var pNew = (o1.mass * o1.vel.getMagnitude()) + (o2.mass * o2.vel.getMagnitude());
+		//console.log(pNew - p);
+		//if (pNew > p) {
+				//console.log(o1.name, o2.name, "pNew > p", pNew, p);
+		//}else console.log(o1.name, o2.name, "pNew <= p", pNew, p);
+		//console.log("after", newV1.x, newV1.y, newV2.x, newV2.y);
+		//console.log("momentum after", (o1.mass * o1.vel.getMagnitude()) + (o2.mass * o2.vel.getMagnitude()));
+		return true;
+	},
+	collideDamage(b) {
+		if (!o.damage) { return; }
+		const relativeVelocity = o.vel.clone().add(b.vel);
+		const velocityMag = relativeVelocity.getMagnitude();
+		// (trial and error damage)
+		const velocityDamage = (velocityMag < 1) ? 0 : Math.ceil(Math.pow(velocityMag, 1.4) / 10);
+		if (!velocityDamage) { return; }
+		o.damage(velocityDamage, b);
+	},
 	collide(objs) {
-		const innerRadius = (typeof o.innerRadius === 'number') ? o.innerRadius : 0;
-		o.isColliding = false;
-		o.colliding.length = 0;
-		const pushBack = (b, amount) => {
-			const pusher = (o.mass > b.mass) ? o : b;
-			const pushee = (pusher === o) ? b : o;
-			const push = pushee.pos.getUnitVector(pusher.pos).multiply(amount);
-			pushee.pos.add(push);
-		};
-		const doDamage = (m, objHit) => {
-			if (m < 1) { return; }
-			// (trial and error damage)
-			const velocityDamage = Math.ceil(Math.pow(m, 1.4) / 10);
-			// console.log('Damage', m, '-->', velocityDamage);
-			if (o.damage) {
-				o.damage(velocityDamage, objHit);
-			}
-		};
+		o.isColliding = false; // assume not colliding
+		o.colliding.length = 0; // Clear list of colliding objects
 		objs.forEach((b) => {
-			if (o === b || !(b.pos instanceof XY && b.vel instanceof XY)) {
+			if (o === b || !physics.isPhysical(b)) {
 				return false;
 			}
-			const r = o.pos.getDistance(b.pos);
-			const innerRadiusB = (typeof b.innerRadius === 'number') ? b.innerRadius : 0;
-			const edgeToEdgeDistance = r - innerRadius - innerRadiusB;
-			if (edgeToEdgeDistance > 0) {
-				return false;
-			}
+			const { isColliding, edgeToEdgeDistance } = o.collideDetect(b)
+			if (!isColliding) { return false; }
+			// Keep track of colliding objects
 			o.colliding.push(b);
 			// Push back to avoid overlaps
-			// const pushAmount = edgeToEdgeDistance;
-			// pushBack(b, pushAmount);
-
+			o.collidePushback(b, edgeToEdgeDistance);
 			// Bounce
-			// TODO: bounce ... see setNewCollisionVels
-
+			o.collideBounce(b);
 			// Damage
-			const relativeVelocity = o.vel.clone().add(b.vel);
-			const velocityMag = relativeVelocity.getMagnitude();
-			doDamage(velocityMag, b);
+			o.collideDamage(b);
 			return true;
 		});
 		o.isColliding = o.colliding.length > 0;
 		if (o.isColliding) {
-			o.vel.multiply(0.7);
+			o.vel.multiply(physics.collidingVelocityMultiplier);
 		}
 	}
 });
 
 physics.canMove = (o) => ({
-	lastPos: new rocket_boots_coords["Coords"](),
-	pos: new rocket_boots_coords["Coords"](),
-	force: new rocket_boots_coords["Coords"](),
-	acc: new rocket_boots_coords["Coords"](),
-	vel: new rocket_boots_coords["Coords"](),
+	lastPos: newXy(),
+	pos: newXy(),
+	force: newXy(),
+	acc: newXy(),
+	vel: newXy(),
 	move(t) {
 		o.lastPos.set(o.pos);
 		if (o.mass !== 0) {
-			const forceAcc = new rocket_boots_coords["Coords"]((o.force.x / o.mass), (o.force.y / o.mass));
+			const forceAcc = new physics.Coords((o.force.x / o.mass), (o.force.y / o.mass));
 			o.acc.add(forceAcc);
 		}
-		const deltaVel = o.acc.getMultiply(t); // new Coords(o.acc.x * t, o.acc.y * t);
+		const deltaVel = o.acc.getMultiply(t); // new physics.Coords(o.acc.x * t, o.acc.y * t);
 		o.vel.add(deltaVel);
-		const deltaPos = o.vel.getMultiply(t/2); // new Coords(o.vel.x * t / 2, o.vel.y * t / 2);
+		const deltaPos = o.vel.getMultiply(t/2); // new physics.Coords(o.vel.x * t / 2, o.vel.y * t / 2);
 		o.pos.add(deltaPos);
 		// clear because ongoing forces need to be re-applied
 		o.force.clear();
@@ -501,25 +588,26 @@ physics.canMove = (o) => ({
 	}
 });
 
-physics.canGravitate = (o, bigG = BIG_G_DEFAULT) => ({
+physics.canGravitate = (o, bigG = physics.bigG) => ({
 	gravitate(t, objs) {
 		if (o.mass === 0) { return false; }
 		const bigGMass = bigG * o.mass;
 		objs.forEach((b) => { return o.gravitateOne(b, bigGMass); });
-		// o.force.add(new Coords(0,0.0001));
+		// o.force.add(new physics.Coords(0,0.0001));
 	},
 	gravitateOne(b, bigGMass) { // Apply force of gravity due to one object
 		if (
 			b === o // can't get gravity from self
 			|| b.mass === 0 || o.mass === 0 // things without mass don't make gravity
 			|| o.isColliding // collisions cancel gravity with normal force
-			|| !(b.pos instanceof rocket_boots_coords["Coords"])
+			|| !o.gravitate
+			|| !physics.isPhysical(b)
 		) {
 			return false;
 		}
 		const r = o.pos.getDistance(b.pos);
 		// Last resort to prevent black holes or super flinging
-		if (r < MIN_GRAVITY_RADIUS) {
+		if (r < physics.MIN_GRAVITY_RADIUS) {
 			// o.vel.multiply(0.2);
 			return false; 
 		}
@@ -539,20 +627,34 @@ physics.canGravitate = (o, bigG = BIG_G_DEFAULT) => ({
 	}
 });
 
-physics.physical = (o) => {
+physics.canRotate = (o) => ({
+	// https://gamedevelopment.tutsplus.com/tutorials/how-to-create-a-custom-2d-physics-engine-oriented-rigid-bodies--gamedev-8032
+	rotation: 0., // aka. orientation
+	rotVel: 0., // "ω" (omega), aka. angular velocity
+	torque: 0., // T = r × ω
+	momentOfInertia: 0., // difficulty of rotating
+	inverseMomentOfInertia: 0., 
+	rotate(t) {
+		o.rotation += o.rotVel * t;
+		// o.rotVel = 0.;
+	}
+});
+
+physics.physical = (o, { mass = 1, bigG = physics.bigG }) => {
 	Object.assign(
 		o,
 		{
-			mass: 1,
-			// pos: new Coords(),
-			// force: new Coords(),
-			// acc: new Coords(),
-			// vel: new Coords(),
+			mass,
+			// pos: new physics.Coords(),
+			// force: new physics.Coords(),
+			// acc: new physics.Coords(),
+			// vel: new physics.Coords(),
 			// colliding: [],
 		},
 		physics.canCollide(o),
 		physics.canMove(o),
-		physics.canGravitate(o, BIG_G_DEFAULT),
+		physics.canGravitate(o, bigG),
+		physics.canRotate(o),
 	);
 	return o;
 };

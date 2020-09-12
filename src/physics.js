@@ -28,6 +28,49 @@ function newXy () {
 	return new physics.Coords();
 }
 
+// Thanks to https://www.toptal.com/game/video-game-physics-part-ii-collision-detection-for-solid-objects
+/**
+ * Checks for a collision/overlap between two objects based on an AABB calculation using only their
+ * outer radius (with inner radius as a backup), thus only considers a square for bounding box
+ * @param {Object} a 
+ * @param {Object} b 
+ */
+physics.checkAabbCollision = (a, b) => {
+	const aR = a.outerRadius || a.innerRadius;
+	const bR = b.outerRadius || b.innerRadius;
+
+	const aMax = {
+		x: a.pos.x + aR,
+		y: a.pos.y + aR,
+	};
+	const bMin = {
+		x: b.pos.x - bR,
+		y: b.pos.y - bR,
+	};
+	if (bMin.x > aMax.x || bMin.y > aMax.y) { return false; }
+
+	const aMin = {
+		x: a.pos.x - aR,
+		y: a.pos.y - aR,
+	};
+	const bMax = {
+		x: b.pos.x + bR,
+		y: b.pos.y + bR,
+	};
+	if (aMin.x > bMax.x || aMin.y > bMax.y) { return false; }
+
+	return true;
+};
+
+physics.checkRadiusCollision = (a, b) => {
+	const innerRadius = (typeof a.innerRadius === 'number') ? a.innerRadius : 0;
+	const innerRadiusB = (typeof b.innerRadius === 'number') ? b.innerRadius : 0;
+	const r = a.pos.getDistance(b.pos);
+	const edgeToEdgeDistance = r - innerRadius - innerRadiusB;
+	const isColliding = (edgeToEdgeDistance > 0) ? false : true;
+	return { isColliding, edgeToEdgeDistance };
+};
+
 /**
  * Determine if the object is physical
  * @param {Object} o - object
@@ -50,19 +93,16 @@ physics.getOrbitalVelocity = function (smallObject, bigObject, left = false, big
 physics.canCollide = (o) => ({
 	colliding: [],
 	collideDetect(b) {
-		const innerRadius = (typeof o.innerRadius === 'number') ? o.innerRadius : 0;
-		const innerRadiusB = (typeof b.innerRadius === 'number') ? b.innerRadius : 0;
-		const r = o.pos.getDistance(b.pos);
-		const edgeToEdgeDistance = r - innerRadius - innerRadiusB;
-		const isColliding = (edgeToEdgeDistance > 0) ? false : true;
-		return { isColliding, edgeToEdgeDistance };
+		if (!physics.checkAabbCollision(this, b)) { return false; }
+		return physics.checkRadiusCollision(this, b); 
 	},
 	collidePushback(b, edgeToEdgeDistance, pushMultiplier = physics.collidePushbackMultipler) {
-		const pushAmount = edgeToEdgeDistance * pushMultiplier;
 		const pusher = (o.mass > b.mass) ? o : b;
 		const pushee = (pusher === o) ? b : o;
-		const push = pushee.pos.getUnitVector(pusher.pos).multiply(pushAmount);
+		const push = pushee.pos.getUnitVector(pusher.pos) // push direction
+			.multiply(edgeToEdgeDistance * pushMultiplier); // push amount
 		pushee.pos.add(push);
+		return { pusher, pushee, push };
 	},
 	collideBounce(o2, elasticity = physics.elasticity) {
 		// Thanks to http://www.gamasutra.com/view/feature/131424/pool_hall_lessons_fast_accurate_.php?page=3
