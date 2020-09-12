@@ -1,6 +1,6 @@
 {
   "name": "rocket-boots-physics",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Basic physics",
   "type": "module",
   "main": "./index.cjs",
@@ -29,7 +29,7 @@
   },
   "homepage": "https://github.com/rocket-boots/physics#readme",
   "dependencies": {
-    "rocket-boots-coords": "git+https://github.com/rocket-boots/Coords.git#v0.5.0"
+    "rocket-boots-coords": "git+https://github.com/rocket-boots/Coords.git#v0.6.0"
   },
   "devDependencies": {
     "webpack": "^4.44.1",
