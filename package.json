@@ -32,8 +32,8 @@
     "rocket-boots-coords": "git+https://github.com/rocket-boots/Coords.git#v0.6.0"
   },
   "devDependencies": {
-    "webpack": "^4.44.1",
-    "webpack-cli": "^3.3.12",
+    "webpack": "^5.75.0",
+    "webpack-cli": "^5.0.1",
     "webpack-node-externals": "^1.7.2"
   }
 }
